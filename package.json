@@ -1,0 +1,35 @@
+{
+  "name": "vite-plugin-organize-resource",
+  "version": "0.0.0",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "pack": "pnpm run build && pnpm pack"
+  },
+  "keywords": [
+    "vite-plugin"
+  ],
+  "author": "yulinzhao",
+  "license": "MIT",
+  "description": "Organize resource files and register them in window",
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2"
+  },
+  "peerDependencies": {
+    "vite": "^6.0.3"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0"
+  },
+  "packageManager": "pnpm@9.15.0"
+}
