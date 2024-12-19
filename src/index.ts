@@ -64,10 +64,14 @@ export default function vitePluginOrganizeResource(
         if (Object.prototype.hasOwnProperty.call(option, key)) {
           const element = Array.isArray(option[key]) ? option[key] : [option[key]]
           if (element.includes(path.extname(file.name))) {
+            const imgURL = normalizePath(base + filePath.replace(path.resolve(outDir), ''))
+              .replace('https:/', 'https://')
+              .replace('http:/', 'http://')
+
             if (outList[key]) {
-              outList[key].push(normalizePath(base + filePath.replace(path.resolve(outDir), '')))
+              outList[key].push(imgURL)
             } else {
-              outList[key] = [normalizePath(base + filePath.replace(path.resolve(outDir), ''))]
+              outList[key] = [imgURL]
             }
           }
         }
