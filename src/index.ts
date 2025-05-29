@@ -57,7 +57,7 @@ export default function vitePluginOrganizeResource(
       }
 
       let html = fs.readFileSync(htmlPath, 'utf-8')
-      html = html.replace('<head>', `<head>\n\n    <script>\n${script}\n    </script>\n`)
+      html = html.replace('<head>', `<head>\n\n    <script>\n${script}    </script>\n`)
 
       fs.writeFileSync(htmlPath, html)
       return true
@@ -111,7 +111,7 @@ export default function vitePluginOrganizeResource(
           const resourceTypes = Object.keys(outList).filter((key) => outList[key].length > 0)
           const totalFiles = Object.values(outList).reduce((sum, files) => sum + files.length, 0)
           console.log(chalk.green(`:: 已整理 ${totalFiles} 个资源文件 => ${resourceTypes.join(', ')}`))
-
+          console.log()
           if (option.verbose) {
             resourceTypes.forEach((type) => {
               console.log(chalk.gray(`   ${type}: ${outList[type].length} 个文件`))
