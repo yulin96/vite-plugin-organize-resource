@@ -142,28 +142,11 @@ const injectScriptToHtml = (htmlPath: string, script: string): boolean => {
     const headOpenMatch = /<head\b[^>]*>/i.exec(injectedHtml)
     const headCloseMatch = /<\/head>/i.exec(injectedHtml)
 
-    if (
-      headOpenMatch &&
-      headCloseMatch &&
-      headCloseMatch.index > headOpenMatch.index + headOpenMatch[0].length
-    ) {
-      const headContentStart = headOpenMatch.index + headOpenMatch[0].length
-      const headContentEnd = headCloseMatch.index
-      const headContent = injectedHtml.slice(headContentStart, headContentEnd)
-      const viewportMetaMatch = /<meta\b[^>]*\bname\s*=\s*(['"])viewport\1[^>]*>/i.exec(headContent)
-
-      if (viewportMetaMatch) {
-        const insertIndex = headContentStart + viewportMetaMatch.index + viewportMetaMatch[0].length
-        injectedHtml = `${injectedHtml.slice(0, insertIndex)}${lineBreak}${scriptTag}${injectedHtml.slice(insertIndex)}`
-      } else {
-        const firstScriptMatch = /<script\b/i.exec(headContent)
-        if (firstScriptMatch) {
-          const insertIndex = headContentStart + firstScriptMatch.index
-          injectedHtml = `${injectedHtml.slice(0, insertIndex)}${scriptTag}${lineBreak}${injectedHtml.slice(insertIndex)}`
-        } else {
-          injectedHtml = injectedHtml.replace(/^([ \t]*)<\/head>/im, `${scriptTag}${lineBreak}$1</head>`)
-        }
-      }
+    if (headOpenMatch) {
+      const insertIndex = headOpenMatch.index + headOpenMatch[0].length
+      injectedHtml = `${injectedHtml.slice(0, insertIndex)}${lineBreak}${scriptTag}${injectedHtml.slice(insertIndex)}`
+    } else if (headCloseMatch) {
+      injectedHtml = injectedHtml.replace(/^([ \t]*)<\/head>/im, `${scriptTag}${lineBreak}$1</head>`)
     } else if (/<\/head>/i.test(injectedHtml)) {
       injectedHtml = injectedHtml.replace(/^([ \t]*)<\/head>/im, `${scriptTag}${lineBreak}$1</head>`)
     } else {
