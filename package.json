@@ -4,6 +4,14 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "type": "module",
+  "homepage": "https://github.com/yulin96/vite-plugin-organize-resource",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yulin96/vite-plugin-organize-resource"
+  },
+  "bugs": {
+    "url": "https://github.com/yulin96/vite-plugin-organize-resource/issues"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
