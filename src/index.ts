@@ -1,80 +1,204 @@
 import chalk from 'chalk'
-import fs from 'node:fs'
-import path from 'node:path'
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { extname, relative, resolve } from 'node:path'
 import { normalizePath, Plugin } from 'vite'
 
+const DEFAULT_RESOURCE_CONFIG = {
+  IMG_RESOURCES: ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp'],
+} satisfies Record<string, string[]>
+
+const RESOURCE_SCRIPT_ID = 'vite-plugin-organize-resource'
+const RESOURCE_SCRIPT_PATTERN = new RegExp(
+  `[ \\t]*<script id="${RESOURCE_SCRIPT_ID}">[\\s\\S]*?<\\/script>\\r?\\n?`,
+)
+
+type ResourceConfig = Record<string, string | string[]>
+
+interface ExtensionRule {
+  key: string
+  extensions: Set<string>
+}
+
 export interface VitePluginOrganizeResourceOption {
-  config: Record<string, string | string[]>
+  config?: ResourceConfig
   /** 是否输出调试信息 */
   verbose?: boolean
 }
 
-export default function vitePluginOrganizeResource(
-  option: VitePluginOrganizeResourceOption = {
-    config: {
-      IMG_RESOURCES: ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp'],
-    },
-    verbose: false,
+const directoryExists = (dirPath: string): boolean => {
+  try {
+    return existsSync(dirPath) && statSync(dirPath).isDirectory()
+  } catch {
+    return false
   }
-): Plugin {
-  let outDir = ''
-  let base = ''
-  const outList: Record<string, string[]> = {}
+}
 
-  /**
-   * 检查目录是否存在
-   */
-  function directoryExists(dirPath: string): boolean {
+const ensureTrailingSlash = (value: string): string => (value.endsWith('/') ? value : `${value}/`)
+
+const isAbsoluteUrl = (value: string): boolean => /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(value)
+
+const normalizeExtension = (value: string): string | null => {
+  const normalized = value.trim().toLowerCase()
+  if (!normalized) return null
+  return normalized.startsWith('.') ? normalized : `.${normalized}`
+}
+
+const encodePathSegment = (segment: string): string => {
+  try {
+    return encodeURIComponent(decodeURIComponent(segment))
+  } catch {
+    return encodeURIComponent(segment)
+  }
+}
+
+const encodePathSegments = (value: string): string =>
+  value
+    .split('/')
+    .map((segment) => (segment ? encodePathSegment(segment) : segment))
+    .join('/')
+
+const toSingleQuotedJsString = (value: string): string =>
+  `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`
+
+const createExtensionRules = (config: ResourceConfig): ExtensionRule[] => {
+  const rules: ExtensionRule[] = []
+
+  for (const [key, extensions] of Object.entries(config)) {
+    const extList = (Array.isArray(extensions) ? extensions : [extensions])
+      .map(normalizeExtension)
+      .filter((ext): ext is string => Boolean(ext))
+
+    if (extList.length > 0) {
+      rules.push({ key, extensions: new Set(extList) })
+    }
+  }
+
+  return rules
+}
+
+const buildResourceUrl = (base: string, relativeFilePath: string): string => {
+  const normalizedRelativePath = normalizePath(relativeFilePath).replace(/^\/+/, '')
+  const encodedRelativePath = encodePathSegments(normalizedRelativePath)
+
+  if (isAbsoluteUrl(base)) {
     try {
-      return fs.existsSync(dirPath) && fs.statSync(dirPath).isDirectory()
+      return new URL(encodedRelativePath, ensureTrailingSlash(base)).toString()
     } catch {
-      return false
+      // 无法解析时回退到路径拼接
     }
   }
 
-  /**
-   * 生成资源脚本内容
-   */
-  function generateResourceScript(): string {
-    let result = ''
-    for (const [key, files] of Object.entries(outList)) {
-      if (files.length > 0) {
-        const fileList = files.map((file) => `"${file}"`).join(',')
-        result += `    window.${key}=[${fileList}];\n`
+  const normalizedBase = normalizePath(base || '/')
+  return normalizePath(`${ensureTrailingSlash(normalizedBase)}${encodedRelativePath}`).replace(/\/{2,}/g, '/')
+}
+
+const walkDirectory = (dir: string, onFile: (filePath: string) => void): void => {
+  const entries = readdirSync(dir, { withFileTypes: true })
+
+  for (const entry of entries) {
+    const filePath = resolve(dir, entry.name)
+
+    if (entry.isDirectory()) {
+      walkDirectory(filePath, onFile)
+      continue
+    }
+
+    if (entry.isFile()) {
+      onFile(filePath)
+    }
+  }
+}
+
+const generateResourceScript = (resources: Record<string, string[]>): string =>
+  Object.entries(resources)
+    .filter(([, files]) => files.length > 0)
+    .map(([key, files]) => {
+      const fileList = files.map((file) => toSingleQuotedJsString(file)).join(',')
+      return `window[${toSingleQuotedJsString(key)}] = [${fileList}];`
+    })
+    .join('\n')
+
+const injectScriptToHtml = (htmlPath: string, script: string): boolean => {
+  if (!existsSync(htmlPath)) {
+    console.log(chalk.yellow(`:: index.html 文件不存在: ${htmlPath}`))
+    return false
+  }
+
+  try {
+    const html = readFileSync(htmlPath, 'utf-8')
+    const lineBreak = html.includes('\r\n') ? '\r\n' : '\n'
+    const htmlWithoutScript = html.replace(RESOURCE_SCRIPT_PATTERN, '')
+    const headMatch = htmlWithoutScript.match(/^([ \t]*)<\/head>/im)
+    const headIndent = headMatch?.[1] ?? ''
+    const scriptIndent = `${headIndent}  `
+    const scriptContentIndent = `${scriptIndent}  `
+    const scriptTag = [
+      `${scriptIndent}<script id="${RESOURCE_SCRIPT_ID}">`,
+      ...script.split(/\r?\n/).map((line) => `${scriptContentIndent}${line}`),
+      `${scriptIndent}</script>`,
+    ].join(lineBreak)
+    let injectedHtml = htmlWithoutScript
+
+    const headOpenMatch = /<head\b[^>]*>/i.exec(injectedHtml)
+    const headCloseMatch = /<\/head>/i.exec(injectedHtml)
+
+    if (
+      headOpenMatch &&
+      headCloseMatch &&
+      headCloseMatch.index > headOpenMatch.index + headOpenMatch[0].length
+    ) {
+      const headContentStart = headOpenMatch.index + headOpenMatch[0].length
+      const headContentEnd = headCloseMatch.index
+      const headContent = injectedHtml.slice(headContentStart, headContentEnd)
+      const viewportMetaMatch = /<meta\b[^>]*\bname\s*=\s*(['"])viewport\1[^>]*>/i.exec(headContent)
+
+      if (viewportMetaMatch) {
+        const insertIndex = headContentStart + viewportMetaMatch.index + viewportMetaMatch[0].length
+        injectedHtml = `${injectedHtml.slice(0, insertIndex)}${lineBreak}${scriptTag}${injectedHtml.slice(insertIndex)}`
+      } else {
+        const firstScriptMatch = /<script\b/i.exec(headContent)
+        if (firstScriptMatch) {
+          const insertIndex = headContentStart + firstScriptMatch.index
+          injectedHtml = `${injectedHtml.slice(0, insertIndex)}${scriptTag}${lineBreak}${injectedHtml.slice(insertIndex)}`
+        } else {
+          injectedHtml = injectedHtml.replace(/^([ \t]*)<\/head>/im, `${scriptTag}${lineBreak}$1</head>`)
+        }
       }
+    } else if (/<\/head>/i.test(injectedHtml)) {
+      injectedHtml = injectedHtml.replace(/^([ \t]*)<\/head>/im, `${scriptTag}${lineBreak}$1</head>`)
+    } else {
+      injectedHtml = `${scriptTag}${lineBreak}${injectedHtml}`
     }
-    return result
+
+    writeFileSync(htmlPath, injectedHtml)
+    return true
+  } catch (error) {
+    console.error(chalk.red(`:: 注入脚本失败: ${error}`))
+    return false
+  }
+}
+
+export default function vitePluginOrganizeResource(option: VitePluginOrganizeResourceOption = {}): Plugin {
+  const mergedOption: Required<VitePluginOrganizeResourceOption> = {
+    verbose: option.verbose ?? false,
+    config: {
+      ...DEFAULT_RESOURCE_CONFIG,
+      ...option.config,
+    },
   }
 
-  /**
-   * 注入脚本到 HTML
-   */
-  function injectScriptToHtml(htmlPath: string, script: string): boolean {
-    try {
-      if (!fs.existsSync(htmlPath)) {
-        console.log(chalk.yellow(`:: index.html 文件不存在: ${htmlPath}`))
-        return false
-      }
-
-      let html = fs.readFileSync(htmlPath, 'utf-8')
-      html = html.replace('<head>', `<head>\n\n    <script>\n${script}    </script>\n`)
-
-      fs.writeFileSync(htmlPath, html)
-      return true
-    } catch (error) {
-      console.error(chalk.red(`:: 注入脚本失败: ${error}`))
-      return false
-    }
-  }
+  const extensionRules = createExtensionRules(mergedOption.config)
+  let outDir = normalizePath(resolve('dist'))
+  let base = '/'
 
   return {
     name: 'vite-plugin-organize-resource',
     apply: 'build',
     configResolved(config) {
-      outDir = config.build.outDir
+      outDir = normalizePath(resolve(config.root, config.build.outDir))
       base = config.base
 
-      if (option.verbose) {
+      if (mergedOption.verbose) {
         console.log(chalk.blue(`:: 输出目录: ${outDir}`))
         console.log(chalk.blue(`:: 基础路径: ${base}`))
       }
@@ -83,86 +207,64 @@ export default function vitePluginOrganizeResource(
       sequential: true,
       order: 'post',
       handler() {
-        // 检查输出目录是否存在
+        if (extensionRules.length === 0) {
+          console.log(chalk.yellow(':: 未配置有效的资源后缀，跳过资源整理'))
+          return
+        }
+
         if (!directoryExists(outDir)) {
           console.log(chalk.yellow(`:: 输出目录不存在，跳过资源整理: ${outDir}`))
           return
         }
 
-        // 清空之前的结果
-        Object.keys(outList).forEach((key) => delete outList[key])
+        const resources = Object.fromEntries(extensionRules.map((rule) => [rule.key, [] as string[]]))
 
-        // 读取资源文件
-        readPath(path.resolve(outDir), option.config)
+        try {
+          walkDirectory(outDir, (filePath) => {
+            const fileExt = extname(filePath).toLowerCase()
+            if (!fileExt) return
 
-        // 生成脚本内容
-        const script = generateResourceScript()
+            for (const rule of extensionRules) {
+              if (!rule.extensions.has(fileExt)) continue
 
-        if (!script.trim()) {
+              const resourceUrl = buildResourceUrl(base, relative(outDir, filePath))
+              resources[rule.key].push(resourceUrl)
+
+              if (mergedOption.verbose) {
+                console.log(chalk.gray(`   找到资源: ${rule.key} -> ${resourceUrl}`))
+              }
+              break
+            }
+          })
+        } catch (error) {
+          console.error(chalk.red(`:: 读取目录失败: ${outDir} - ${error}`))
+          return
+        }
+
+        for (const files of Object.values(resources)) {
+          files.sort()
+        }
+
+        const script = generateResourceScript(resources)
+        if (!script) {
           console.log(chalk.yellow(':: 未找到匹配的资源文件'))
           return
         }
 
-        // 注入到 HTML
-        const indexHtml = path.resolve(outDir, 'index.html')
+        const indexHtml = resolve(outDir, 'index.html')
         const success = injectScriptToHtml(indexHtml, script)
+        if (!success) return
 
-        if (success) {
-          const resourceTypes = Object.keys(outList).filter((key) => outList[key].length > 0)
-          const totalFiles = Object.values(outList).reduce((sum, files) => sum + files.length, 0)
-          console.log(chalk.green(`:: 已整理 ${totalFiles} 个资源文件 => ${resourceTypes.join(', ')}`))
-          console.log()
-          if (option.verbose) {
-            resourceTypes.forEach((type) => {
-              console.log(chalk.gray(`   ${type}: ${outList[type].length} 个文件`))
-            })
-          }
+        const resourceTypes = Object.keys(resources).filter((key) => resources[key].length > 0)
+        const totalFiles = Object.values(resources).reduce((sum, files) => sum + files.length, 0)
+
+        console.log(chalk.green(`:: 已整理 ${totalFiles} 个资源文件 => ${resourceTypes.join(', ')}`))
+        if (mergedOption.verbose) {
+          resourceTypes.forEach((type) => {
+            console.log(chalk.gray(`   ${type}: ${resources[type].length} 个文件`))
+          })
         }
       },
     },
-  }
-
-  /**
-   * 递归读取目录中的资源文件
-   */
-  function readPath(dir: string, config: VitePluginOrganizeResourceOption['config']): void {
-    try {
-      const files = fs.readdirSync(dir, { withFileTypes: true })
-
-      files.forEach((file) => {
-        const filePath = path.join(dir, file.name)
-
-        if (file.isDirectory()) {
-          readPath(filePath, config)
-          return
-        }
-
-        const fileExt = path.extname(file.name).toLowerCase()
-
-        // 遍历配置的资源类型
-        for (const [key, extensions] of Object.entries(config)) {
-          const extArray = Array.isArray(extensions) ? extensions : [extensions]
-          const normalizedExts = extArray.map((ext) => ext.toLowerCase())
-
-          if (normalizedExts.includes(fileExt)) {
-            const imgURL = normalizePath(base + filePath.replace(path.resolve(outDir), ''))
-              .replace('https:/', 'https://')
-              .replace('http:/', 'http://')
-
-            if (!outList[key]) {
-              outList[key] = []
-            }
-            outList[key].push(imgURL)
-
-            if (option.verbose) {
-              console.log(chalk.gray(`   找到资源: ${key} -> ${imgURL}`))
-            }
-            break // 找到匹配的类型后跳出循环
-          }
-        }
-      })
-    } catch (error) {
-      console.error(chalk.red(`:: 读取目录失败: ${dir} - ${error}`))
-    }
   }
 }

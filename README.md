@@ -39,3 +39,7 @@ export default {
 console.log(window.IMG_RESOURCES)
 // 输出类似 ["assets/image1.png", "assets/image2.jpg", ...]
 ```
+
+## 说明
+
+- 当前版本仅支持 ESM（`import`），不再提供 CommonJS（`require`）入口。

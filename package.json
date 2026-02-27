@@ -2,17 +2,19 @@
   "name": "vite-plugin-organize-resource",
   "version": "0.0.12",
   "main": "./dist/index.js",
-  "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
+  "type": "module",
   "exports": {
     ".": {
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.js"
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     }
   },
   "scripts": {
     "build": "tsup",
-    "pack": "pnpm run build && pnpm pack"
+    "typecheck": "tsc -p tsconfig.json",
+    "pack": "pnpm run build && pnpm pack",
+    "build:test": "cd playground && vite build"
   },
   "keywords": [
     "vite-plugin"
